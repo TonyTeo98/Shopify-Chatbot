@@ -12,6 +12,7 @@ database.sqlite
 
 .env
 .env.*
+!.env.production.example
 
 package-lock.json
 yarn.lock
