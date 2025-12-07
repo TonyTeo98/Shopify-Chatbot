@@ -33,3 +33,6 @@ shopify.*.toml
 
 # PostgreSQL 数据目录（Docker 持久化）
 /data/
+
+# 本地学习笔记
+learning/
