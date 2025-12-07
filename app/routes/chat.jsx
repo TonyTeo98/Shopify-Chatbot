@@ -341,13 +341,20 @@ function getCorsHeaders(request) {
   const origin = request.headers.get("Origin") || "*";
   const requestHeaders = request.headers.get("Access-Control-Request-Headers") || "Content-Type, Accept";
 
-  return {
+  const headers = {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": requestHeaders,
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Max-Age": "86400" // 24 hours
   };
+
+  // Handle Private Network Access preflight
+  if (request.headers.get("Access-Control-Request-Private-Network") === "true") {
+    headers["Access-Control-Allow-Private-Network"] = "true";
+  }
+
+  return headers;
 }
 
 /**
