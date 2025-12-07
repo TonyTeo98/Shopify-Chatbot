@@ -42,6 +42,13 @@ export async function loader({ request }) {
  * React Router action function for handling POST requests
  */
 export async function action({ request }) {
+  // Handle OPTIONS requests (CORS preflight)
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: getCorsHeaders(request)
+    });
+  }
   return handleChatRequest(request);
 }
 
