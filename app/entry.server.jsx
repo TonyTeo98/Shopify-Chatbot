@@ -1,3 +1,6 @@
+// Initialize Langfuse OpenTelemetry instrumentation
+import "./instrumentation.server.js";
+
 import { PassThrough } from "stream";
 import { renderToPipeableStream } from "react-dom/server";
 import { ServerRouter } from "react-router";
