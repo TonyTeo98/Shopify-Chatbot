@@ -105,9 +105,24 @@ export function createClaudeService(apiKey = process.env.CLAUDE_API_KEY) {
         const finalMessage = await stream.finalMessage();
 
         // Update span with output and usage information
+        // Extract actual content from the message
+        const outputContent = finalMessage.content.map(c => {
+          if (c.type === 'text') {
+            return c.text;
+          } else if (c.type === 'tool_use') {
+            return {
+              type: 'tool_use',
+              name: c.name,
+              input: c.input
+            };
+          }
+          return c;
+        });
+
         span.update({
           output: {
             role: finalMessage.role,
+            content: outputContent,
             contentType: finalMessage.content.map(c => c.type).join(','),
             stopReason: finalMessage.stop_reason
           },

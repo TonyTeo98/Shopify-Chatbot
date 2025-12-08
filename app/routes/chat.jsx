@@ -261,7 +261,7 @@ async function handleChatSession({
 
           // Handle content block completion
           onContentBlock: (contentBlock) => {
-            if (contentBlock.type === 'text') {
+            if (contentBlock && contentBlock.type === 'text') {
               stream.sendMessage({
                 type: 'content_block_complete',
                 content_block: contentBlock
