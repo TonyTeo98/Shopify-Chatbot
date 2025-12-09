@@ -36,3 +36,4 @@ shopify.*.toml
 
 # 本地学习笔记
 learning/
+.claude/
