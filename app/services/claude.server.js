@@ -80,6 +80,11 @@ export function createClaudeService(apiKey = process.env.CLAUDE_API_KEY) {
       );
 
       try {
+        // Track streaming performance metrics
+        const streamStartTime = Date.now();
+        let firstTokenTime = null;
+        let textChunkCount = 0;
+
         const stream = await anthropic.messages.stream({
           model: AppConfig.api.defaultModel,
           max_tokens: AppConfig.api.maxTokens,
@@ -90,7 +95,14 @@ export function createClaudeService(apiKey = process.env.CLAUDE_API_KEY) {
 
         // Set up event handlers
         if (streamHandlers.onText) {
-          stream.on('text', streamHandlers.onText);
+          stream.on('text', (textDelta) => {
+            // Track TTFT (Time To First Token)
+            if (!firstTokenTime) {
+              firstTokenTime = Date.now();
+            }
+            textChunkCount++;
+            streamHandlers.onText(textDelta);
+          });
         }
 
         if (streamHandlers.onMessage) {
@@ -103,6 +115,9 @@ export function createClaudeService(apiKey = process.env.CLAUDE_API_KEY) {
 
         // Wait for final message
         const finalMessage = await stream.finalMessage();
+        const streamEndTime = Date.now();
+        const totalStreamTime = streamEndTime - streamStartTime;
+        const ttft = firstTokenTime ? firstTokenTime - streamStartTime : null;
 
         // Update span with output and usage information
         // Extract actual content from the message
@@ -114,6 +129,11 @@ export function createClaudeService(apiKey = process.env.CLAUDE_API_KEY) {
               type: 'tool_use',
               name: c.name,
               input: c.input
+            };
+          } else if (c.type === 'thinking') {
+            return {
+              type: 'thinking',
+              thinking: c.thinking
             };
           }
           return c;
@@ -131,6 +151,14 @@ export function createClaudeService(apiKey = process.env.CLAUDE_API_KEY) {
             output: finalMessage.usage.output_tokens,
             total: (finalMessage.usage.input_tokens || 0) + (finalMessage.usage.output_tokens || 0),
           } : undefined,
+          metadata: {
+            performance: {
+              ttftMs: ttft,
+              totalStreamTimeMs: totalStreamTime,
+              textChunkCount: textChunkCount,
+              averageChunkIntervalMs: textChunkCount > 1 ? totalStreamTime / textChunkCount : null
+            }
+          }
         });
 
         span.end();

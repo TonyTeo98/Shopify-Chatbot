@@ -8,6 +8,8 @@ import AppConfig from "../services/config.server";
 import { createSseStream } from "../services/streaming.server";
 import { createClaudeService } from "../services/claude.server";
 import { createToolService } from "../services/tool.server";
+import { startObservation } from "@langfuse/tracing";
+import { langfuseSpanProcessor } from "../instrumentation.server.js";
 
 
 /**
@@ -142,6 +144,28 @@ async function handleChatSession({
     mcpApiUrl,
   );
 
+  // Check if Langfuse is enabled
+  const langfuseEnabled = !!(process.env.LANGFUSE_PUBLIC_KEY && process.env.LANGFUSE_SECRET_KEY);
+
+  // Create a session-level span for the entire conversation
+  let sessionSpan;
+  if (langfuseEnabled) {
+    sessionSpan = startObservation(
+      "chat-session",
+      {
+        input: {
+          userMessage,
+          conversationId,
+          promptType,
+          shopDomain
+        }
+      },
+      { asType: "span" }
+    );
+  }
+
+  const sessionStartTime = Date.now();
+
   try {
     // Send conversation ID to client
     stream.sendMessage({ type: 'id', conversation_id: conversationId });
@@ -185,8 +209,21 @@ async function handleChatSession({
 
     // Execute the conversation stream
     let finalMessage = { role: 'user', content: userMessage };
+    let turnCount = 0;
+    const turnDetails = [];
+    const MAX_TURNS = 20; // Prevent infinite loops
 
     while (finalMessage.stop_reason !== "end_turn") {
+      turnCount++;
+
+      // Detect potential infinite loops
+      if (turnCount > MAX_TURNS) {
+        console.warn(`⚠️ Maximum turns (${MAX_TURNS}) reached, ending conversation`);
+        break;
+      }
+
+      const turnStartTime = Date.now();
+
       finalMessage = await claudeService.streamConversation(
         {
           messages: conversationHistory,
@@ -231,28 +268,88 @@ async function handleChatSession({
               tool_use_message: toolUseMessage
             });
 
-            // Call the tool
-            const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
+            // Check if Langfuse is enabled
+            const langfuseEnabled = !!(process.env.LANGFUSE_PUBLIC_KEY && process.env.LANGFUSE_SECRET_KEY);
 
-            // Handle tool response based on success/error
-            if (toolUseResponse.error) {
-              await toolService.handleToolError(
-                toolUseResponse,
-                toolName,
-                toolUseId,
-                conversationHistory,
-                stream.sendMessage,
-                conversationId
+            let toolSpan;
+            if (langfuseEnabled) {
+              // Create a span for this tool call
+              toolSpan = startObservation(
+                `tool-${toolName}`,
+                {
+                  input: toolArgs,
+                  metadata: {
+                    toolUseId,
+                    conversationId
+                  }
+                },
+                { asType: "span" }
               );
-            } else {
-              await toolService.handleToolSuccess(
-                toolUseResponse,
-                toolName,
-                toolUseId,
-                conversationHistory,
-                productsToDisplay,
-                conversationId
-              );
+            }
+
+            const startTime = Date.now();
+            let toolUseResponse;
+
+            try {
+              // Call the tool
+              toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
+
+              const executionTime = Date.now() - startTime;
+
+              // Update span with results
+              if (langfuseEnabled && toolSpan) {
+                toolSpan.update({
+                  output: toolUseResponse,
+                  metadata: {
+                    toolUseId,
+                    conversationId,
+                    executionTimeMs: executionTime,
+                    success: !toolUseResponse.error
+                  },
+                  level: toolUseResponse.error ? "ERROR" : "DEFAULT"
+                });
+                toolSpan.end();
+
+                // Flush to ensure data is sent
+                await langfuseSpanProcessor.forceFlush();
+              }
+
+              // Handle tool response based on success/error
+              if (toolUseResponse.error) {
+                await toolService.handleToolError(
+                  toolUseResponse,
+                  toolName,
+                  toolUseId,
+                  conversationHistory,
+                  stream.sendMessage,
+                  conversationId
+                );
+              } else {
+                await toolService.handleToolSuccess(
+                  toolUseResponse,
+                  toolName,
+                  toolUseId,
+                  conversationHistory,
+                  productsToDisplay,
+                  conversationId
+                );
+              }
+            } catch (error) {
+              // Handle unexpected errors
+              if (langfuseEnabled && toolSpan) {
+                toolSpan.update({
+                  level: "ERROR",
+                  statusMessage: error.message,
+                  metadata: {
+                    toolUseId,
+                    conversationId,
+                    executionTimeMs: Date.now() - startTime
+                  }
+                });
+                toolSpan.end();
+                await langfuseSpanProcessor.forceFlush();
+              }
+              throw error;
             }
 
             // Signal new message to client
@@ -270,6 +367,15 @@ async function handleChatSession({
           }
         }
       );
+
+      // Record turn details
+      const turnEndTime = Date.now();
+      turnDetails.push({
+        turnNumber: turnCount,
+        stopReason: finalMessage.stop_reason,
+        durationMs: turnEndTime - turnStartTime,
+        hasToolUse: finalMessage.content?.some(c => c.type === 'tool_use') || false
+      });
     }
 
     // Signal end of turn
@@ -282,7 +388,48 @@ async function handleChatSession({
         products: productsToDisplay
       });
     }
+
+    // Update session span with conversation metrics
+    if (langfuseEnabled && sessionSpan) {
+      const sessionEndTime = Date.now();
+      const totalSessionTime = sessionEndTime - sessionStartTime;
+
+      sessionSpan.update({
+        output: {
+          turnCount,
+          productsDisplayed: productsToDisplay.length,
+          finalStopReason: finalMessage.stop_reason,
+          hitMaxTurns: turnCount >= MAX_TURNS
+        },
+        metadata: {
+          conversationMetrics: {
+            totalSessionTimeMs: totalSessionTime,
+            turnCount,
+            turnDetails,
+            averageTurnTimeMs: turnCount > 0 ? totalSessionTime / turnCount : 0,
+            mcpToolsAvailable: mcpClient.tools?.length || 0,
+            historyMessageCount: conversationHistory.length
+          },
+          businessMetrics: {
+            productsDisplayed: productsToDisplay.length
+          }
+        }
+      });
+      sessionSpan.end();
+
+      // Flush to ensure data is sent
+      await langfuseSpanProcessor.forceFlush();
+    }
   } catch (error) {
+    // Update session span with error
+    if (langfuseEnabled && sessionSpan) {
+      sessionSpan.update({
+        level: "ERROR",
+        statusMessage: error.message
+      });
+      sessionSpan.end();
+      await langfuseSpanProcessor.forceFlush();
+    }
     // The streaming handler takes care of error handling
     throw error;
   }
