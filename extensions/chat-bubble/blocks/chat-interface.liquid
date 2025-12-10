@@ -54,23 +54,28 @@
       "type": "text",
       "id": "welcome_message",
       "label": "Welcome Message",
-      "default": "👋 Hi there! How can I help you today?"
+      "default": "🏂 Hey! Ridge here. Looking for a new board or have questions about gear? I'm here to help you find the perfect setup!"
     },
     {
       "type": "select",
       "id": "system_prompt",
-      "label": "System Prompt",
+      "label": "AI Assistant Personality",
+      "info": "Choose the personality and style of your AI assistant",
       "options": [
         {
-          "value": "standardAssistant",
-          "label": "Standard Assistant"
+          "value": "ridgeAssistant",
+          "label": "Ridge - Snowboard Specialist (Recommended)"
         },
         {
           "value": "enthusiasticAssistant",
           "label": "Enthusiastic Assistant"
+        },
+        {
+          "value": "standardAssistant",
+          "label": "Standard Assistant"
         }
       ],
-      "default": "standardAssistant"
+      "default": "ridgeAssistant"
     }
   ]
 }
