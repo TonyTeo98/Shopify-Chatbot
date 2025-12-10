@@ -302,27 +302,153 @@ LANGFUSE_BASE_URL=https://us.cloud.langfuse.com
 - `.env.example` - Development template
 - `.env.production.example` - Production template with additional variables
 
-## Docker Deployment
+## Deployment Architecture - Frontend/Backend Separation
 
-### Services
+**CRITICAL: This project uses a separated frontend/backend deployment model.**
+
+### Architecture Overview
+
+```
+Frontend (Theme Extension)          Backend (API Server)
+        ↓                                    ↓
+Shopify Platform                    Cloud Server (Docker)
+        ↓                                    ↓
+   Shopify CLI                         Docker Compose
+ (npm run deploy)                    (docker-compose up)
+```
+
+### Frontend: Theme Extension
+
+**What it includes:**
+- `/extensions/chat-bubble/` - Shopify Theme App Extension
+- `blocks/chat-interface.liquid` - UI template with schema config
+- `assets/chat.js` - Client-side JavaScript
+- `assets/chat.css` - Styling
+
+**Deployment method:**
+```bash
+# Deploy frontend to Shopify Platform
+npm run deploy
+
+# Or using Shopify CLI directly
+shopify app deploy
+```
+
+**What this does:**
+- Builds the Theme Extension
+- Uploads to Shopify Partner Dashboard
+- Syncs to all stores with the app installed
+- Updates Theme Editor configuration options (persona selector, welcome message, etc.)
+
+**IMPORTANT:** Frontend changes (Liquid templates, JavaScript, CSS, schema config) will NOT take effect until you run `npm run deploy`. Docker deployment only affects the backend API.
+
+### Backend: API Server
+
+**What it includes:**
+- `/app/` - React Router application
+- `/app/routes/chat.jsx` - SSE streaming endpoint
+- `/app/services/` - Claude API, MCP client, tools
+- `/prisma/` - Database schema and migrations
+
+**Deployment method:**
+```bash
+# Deploy backend on cloud server
+docker-compose up -d --build
+```
+
+**What this does:**
+- Builds Node.js application container
+- Starts PostgreSQL database
+- Runs database migrations
+- Starts API server on port 8401
+
+### Complete Deployment Workflow
+
+#### Step 1: Update Code
+
+```bash
+# Local machine
+git add .
+git commit -m "feat: your changes"
+git push origin main
+```
+
+#### Step 2: Deploy Backend (Cloud Server)
+
+```bash
+# SSH to cloud server
+ssh your-server
+cd /path/to/Shopify-Chatbot
+
+# Pull latest code
+git pull origin main
+
+# Deploy backend with Docker
+docker-compose up -d --build
+
+# Verify backend is running
+docker-compose logs -f app
+curl https://your-api-domain.com/chat -I
+```
+
+#### Step 3: Deploy Frontend (Shopify CLI)
+
+```bash
+# Can be run from local machine OR cloud server
+# (wherever Shopify CLI is configured)
+
+cd /path/to/Shopify-Chatbot
+
+# Deploy Theme Extension to Shopify
+npm run deploy
+
+# Verify deployment
+shopify app info
+```
+
+#### Step 4: Verify in Shopify
+
+```
+1. Merchant logs into Shopify Admin
+2. Navigate to: Online Store → Themes → Customize
+3. Add/Edit: AI Chat Assistant block
+4. Verify: New configuration options appear (persona selector, etc.)
+5. Test: Chat functionality with new personas
+```
+
+### When to Deploy What
+
+| Change Type | Requires Frontend Deploy | Requires Backend Deploy |
+|-------------|-------------------------|------------------------|
+| System prompts (`prompts.json`) | ❌ No | ✅ Yes (Docker) |
+| Conversation logic (`chat.jsx`) | ❌ No | ✅ Yes (Docker) |
+| MCP tools (`mcp-client.js`) | ❌ No | ✅ Yes (Docker) |
+| Database schema (`schema.prisma`) | ❌ No | ✅ Yes (Docker) |
+| UI template (`.liquid`) | ✅ Yes (Shopify CLI) | ❌ No |
+| Chat JavaScript (`chat.js`) | ✅ Yes (Shopify CLI) | ❌ No |
+| Styling (`chat.css`) | ✅ Yes (Shopify CLI) | ❌ No |
+| Theme schema (persona selector) | ✅ Yes (Shopify CLI) | ❌ No |
+| Welcome message config | ✅ Yes (Shopify CLI) | ❌ No |
+
+### Docker Deployment (Backend Only)
+
+**Services:**
 
 **PostgreSQL 16**:
-
 - Internal network only (no exposed port in production)
 - Data persisted to `./data/postgres`
 - Health checks configured
 
 **Node.js Application**:
-
 - Built from `Dockerfile` (Alpine Node.js 18)
 - Exposed on port 8401 (maps to internal 3000)
 - Depends on healthy PostgreSQL
 - Runs database setup on startup via `npm run docker-start`
 
-### Commands
+**Commands:**
 
 ```bash
-# Start all services
+# Start all backend services
 docker-compose up -d
 
 # View logs
@@ -334,8 +460,50 @@ docker-compose restart app
 # Stop all services
 docker-compose down
 
-# Rebuild after code changes
+# Rebuild after backend code changes
 docker-compose up -d --build
+```
+
+### Shopify CLI Deployment (Frontend Only)
+
+**Prerequisites:**
+```bash
+# Install Shopify CLI
+npm install -g @shopify/cli
+
+# Login to Shopify
+shopify auth login
+
+# Link to your app
+shopify app config link
+```
+
+**Deploy Commands:**
+```bash
+# Deploy Theme Extension
+npm run deploy
+
+# Deploy specific extension
+shopify app deploy --extension=chat-bubble
+
+# Check deployment status
+shopify app info
+
+# View extension details
+shopify extension list
+```
+
+**Troubleshooting:**
+```bash
+# If deploy fails
+shopify app deploy --reset
+
+# Clear cache and retry
+rm -rf node_modules/.cache
+npm run deploy
+
+# View detailed logs
+shopify app deploy --verbose
 ```
 
 ## Testing and Development Workflow

@@ -18,6 +18,31 @@ Convoease is a production-ready AI-powered customer service assistant for Shopif
 
 This project is based on [Shopify/shop-chat-agent](https://github.com/Shopify/shop-chat-agent) with significant enhancements for production deployment.
 
+## ⚠️ Deployment Architecture - READ THIS FIRST
+
+**This project uses a separated frontend/backend deployment model:**
+
+```
+Frontend (Theme Extension)          Backend (API Server)
+        ↓                                    ↓
+Shopify Platform                    Cloud Server (Docker)
+        ↓                                    ↓
+   Shopify CLI                         Docker Compose
+ (npm run deploy)                  (docker-compose up)
+```
+
+**Two separate deployments are required:**
+
+1. **Backend (Docker)**: Deploy to your cloud server with `docker-compose up -d --build`
+   - Includes: React Router, Claude API, MCP Client, PostgreSQL
+   - Changes to: `app/`, `prisma/`, system prompts, conversation logic
+
+2. **Frontend (Shopify CLI)**: Deploy to Shopify with `npm run deploy`
+   - Includes: Theme Extension, chat UI, persona selector
+   - Changes to: `extensions/`, Liquid templates, JavaScript, CSS, schema config
+
+**📖 See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment instructions.**
+
 ## What's New (vs Original)
 
 | Feature | Original | This Fork |
@@ -85,8 +110,6 @@ This app consists of two main components:
 
 1. **Backend Server**: A React Router app that handles Claude AI communication, MCP tool execution, and chat streaming via Server-Sent Events (SSE).
 2. **Theme Extension**: A Shopify theme extension (`extensions/chat-bubble/`) that provides the customer-facing chat widget.
-
-> **Important**: Docker deployment handles the backend server only. The theme extension must be deployed separately via Shopify CLI.
 
 ### Data Flow
 
