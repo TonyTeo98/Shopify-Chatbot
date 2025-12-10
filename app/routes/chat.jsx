@@ -211,7 +211,10 @@ async function handleChatSession({
     let finalMessage = { role: 'user', content: userMessage };
     let turnCount = 0;
     const turnDetails = [];
-    const MAX_TURNS = 20; // Prevent infinite loops
+    const MAX_TURNS = 10; // Prevent infinite loops - reduced from 20 for extra safety
+
+    // Track tool calls to prevent duplicate invocations
+    const toolCallHistory = new Map(); // key: tool signature (name:args), value: call count
 
     while (finalMessage.stop_reason !== "end_turn") {
       turnCount++;
@@ -260,6 +263,42 @@ async function handleChatSession({
             const toolName = content.name;
             const toolArgs = content.input;
             const toolUseId = content.id;
+
+            // Generate tool call signature and check for duplicates
+            const toolSignature = `${toolName}:${JSON.stringify(toolArgs)}`;
+            const callCount = toolCallHistory.get(toolSignature) || 0;
+
+            if (callCount >= 2) {
+              // Duplicate tool call detected (3rd attempt)
+              console.error(`🚫 Duplicate tool call detected (${callCount + 1} times): ${toolName}`);
+              console.error(`   Arguments: ${JSON.stringify(toolArgs)}`);
+              console.error(`   Force breaking conversation loop to prevent infinite recursion`);
+
+              // Add error tool_result to terminate Claude's tool loop
+              const errorToolResult = {
+                role: 'user',
+                content: [{
+                  type: "tool_result",
+                  tool_use_id: toolUseId,
+                  content: "Error: Tool call limit reached. This tool has been called multiple times with the same parameters. Please provide a response to the user based on previous results."
+                }]
+              };
+              conversationHistory.push(errorToolResult);
+
+              // Save the error to database
+              await saveMessage(conversationId, 'user', JSON.stringify(errorToolResult.content))
+                .catch((error) => {
+                  console.error("Error saving error tool result to database:", error);
+                });
+
+              // Force end_turn on next iteration
+              finalMessage.stop_reason = 'end_turn';
+              return; // Skip actual tool execution
+            }
+
+            // Record this tool call
+            toolCallHistory.set(toolSignature, callCount + 1);
+            console.log(`🔧 Tool call #${callCount + 1}: ${toolName}`);
 
             const toolUseMessage = `Calling tool: ${toolName} with arguments: ${JSON.stringify(toolArgs)}`;
 
@@ -376,6 +415,20 @@ async function handleChatSession({
         durationMs: turnEndTime - turnStartTime,
         hasToolUse: finalMessage.content?.some(c => c.type === 'tool_use') || false
       });
+
+      // Debug logging for conversation flow
+      console.log(`\n📊 Turn ${turnCount} Summary:`);
+      console.log(`   Stop Reason: ${finalMessage.stop_reason}`);
+      console.log(`   Duration: ${turnEndTime - turnStartTime}ms`);
+      console.log(`   Unique Tools Used: ${toolCallHistory.size}`);
+      console.log(`   History Length: ${conversationHistory.length} messages`);
+      if (toolCallHistory.size > 0) {
+        console.log(`   Tool Call Details:`);
+        toolCallHistory.forEach((count, signature) => {
+          console.log(`      - ${signature.split(':')[0]}: ${count} time(s)`);
+        });
+      }
+      console.log('');
     }
 
     // Signal end of turn
